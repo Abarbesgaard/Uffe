@@ -20,6 +20,10 @@ from .screens import (AgentPicker, ConfirmQuit, DetailsScreen, EventsScreen, Evi
                       HelpScreen, LogSelection, LogsScreen, NotesScreen, ReviewRequest)
 
 
+class LogPane(Static, can_focus=True):
+    """Keep keyboard focus on the active logs, including after a modal closes."""
+
+
 class UffeApp(App):
     TITLE = "Uffe · read-only Kubernetes view"
     CSS = """
@@ -80,8 +84,8 @@ class UffeApp(App):
         Binding("1", "namespace(1)", "Scope", show=False),
         Binding("2", "namespace(2)", "Scope", show=False),
         Binding("3", "namespace(3)", "Scope", show=False),
-        Binding("pageup", "history(5)", "History", priority=True, show=False),
-        Binding("pagedown", "history(-5)", "History", priority=True, show=False),
+        Binding("pageup", "history(-5)", "History", priority=True, show=False),
+        Binding("pagedown", "history(5)", "History", priority=True, show=False),
         Binding("home", "latest", "Latest", priority=True, show=False),
         Binding("space", "pause", "Pause", show=False),
         Binding("w", "level('warn')", "Warnings", show=False),
@@ -150,7 +154,7 @@ class UffeApp(App):
                 with Vertical(classes="environment", id=f"env-{index}"):
                     yield Static(id=f"summary-{index}", classes="summary")
                     yield DataTable(id=f"resources-{index}", classes="resources", cursor_type="row", zebra_stripes=True)
-                    yield Static(id=f"logs-{index}", classes="logs")
+                    yield LogPane(id=f"logs-{index}", classes="logs")
                     yield Static(id=f"log-status-{index}", classes="log-status")
         yield Static(id="status")
         yield Footer()
@@ -255,6 +259,7 @@ class UffeApp(App):
                     if current:
                         table.move_cursor(row=rows.index(current), animate=False, scroll=False)
             entries = self.logs_for(env.context)
+            self.log_cursor[env.context] = min(self.log_cursor[env.context], max(0, len(entries)-1))
             self.offsets[env.context] = min(self.offsets[env.context], max(0, len(entries)-1))
             offset = self.offsets[env.context]
             widget = self.query_one(f"#logs-{i}", Static)
@@ -324,7 +329,7 @@ class UffeApp(App):
             if not self.paused:
                 self.action_pause()
             self.status_text = "Log selection is frozen while new entries continue collecting. v marks; s prepares a draft."
-            self.set_focus(None)
+            self.query_one(f"#logs-{self.active_env}").focus()
             self.log_cursor[self.environment.context] = 0
             self.offsets[self.environment.context] = 0
         else:
@@ -363,8 +368,12 @@ class UffeApp(App):
 
     def action_environment(self, delta: int):
         self.active_env = (self.active_env+delta) % len(self.config.environments)
-        self.query_one(f"#resources-{self.active_env}").focus()
+        self.focus_active_region()
         self.paint_data()
+
+    def focus_active_region(self):
+        region = "logs" if self.focus_region == "logs" else "resources"
+        self.query_one(f"#{region}-{self.active_env}").focus()
 
     def action_kind(self):
         self.kind = "Deployment" if self.kind == "Pod" else "Pod"
@@ -405,7 +414,7 @@ class UffeApp(App):
 
     @on(Input.Submitted, "#search")
     def search_submitted(self):
-        self.query_one(f"#resources-{self.active_env}").focus()
+        self.focus_active_region()
 
     def action_search(self):
         self.query_one("#search").focus()
@@ -413,9 +422,12 @@ class UffeApp(App):
     def action_clear(self):
         self.query_one("#search", Input).value = ""
         self.follow_pod = False
-        self.query_one(f"#resources-{self.active_env}").focus()
+        self.focus_active_region()
 
     def action_history(self, amount: int):
+        if self.focus_region == "logs":
+            self.move_log(amount)
+            return
         self.offsets[self.environment.context] = max(0, self.offsets[self.environment.context]+amount)
         self.paint_data()
 
@@ -423,6 +435,7 @@ class UffeApp(App):
         self.focus_region = "pods"
         self.paused = False
         self.offsets = {e.context: 0 for e in self.config.environments}
+        self.focus_active_region()
         self.paint_data()
 
     def action_pause(self):
@@ -557,7 +570,7 @@ class UffeApp(App):
             self.review_notes()
 
     def action_send(self):
-        if self.focus_region == "logs" and not self.notes:
+        if self.focus_region == "logs" and (self.marked_logs or not self.notes):
             records = tuple(self.marked_logs.values()) or ((self.selected_log(),) if self.selected_log() else ())
             if records:
                 self.captured_logs(self.resource, LogSelection(records, draft=True))

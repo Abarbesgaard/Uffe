@@ -94,6 +94,15 @@ uv run ruff check .
 uv build
 ```
 
+GitHub Actions runs these checks on every push to `main`, on pull requests, and
+through manual dispatch. The matrix covers Linux/macOS and Python 3.11/3.12,
+including installation and execution of the built wheel.
+
+For just the isolated model/configuration/handoff unit tests, run
+`uv run pytest tests/test_core.py tests/test_units.py`. The full suite also checks
+keyboard workflows and backend lifecycle using synthetic data, fake API reads,
+and local test processes. Tests never access Kubernetes or send to a real agent.
+
 See `MVP.md` for the behavior contract. The herdr plugin is optional and launches
 the same CLI. Current compatibility target: macOS/Linux and herdr 0.9.5; Windows
 and remote herdr sessions are outside this MVP.
