@@ -1,0 +1,21 @@
+id = "abarbesgaard.uffe"
+name = "Uffe"
+version = "0.1.0"
+min_herdr_version = "0.9.5"
+platforms = ["macos", "linux"]
+description = "Read-only pods and live logs, with evidence drafts to your chosen agent pane."
+
+[[build]]
+command = ["bash", "herdr/install.sh"]
+
+[[panes]]
+id = "view"
+title = "Uffe"
+placement = "tab"
+command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/.venv/bin/uffe\""]
+
+[[actions]]
+id = "open"
+title = "Uffe: open pod view and agent pane"
+contexts = ["pane", "workspace"]
+command = ["bash", "herdr/open.sh"]

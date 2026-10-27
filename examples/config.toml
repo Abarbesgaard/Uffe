@@ -1,0 +1,22 @@
+schema_version = 1
+timezone = "local"
+refresh_seconds = 20
+log_history = "30m"
+log_buffer = 5000
+exclude_containers = []
+
+[[environments]]
+name = "PROD"
+context = "your-production-context"
+namespaces = ["your-team-namespace", "another-namespace"]
+
+[[environments]]
+name = "UAT"
+context = "your-test-context"
+namespaces = ["your-team-namespace", "another-namespace"]
+
+# Optional local checkout hints included in evidence, never agent auto-routing.
+# [[repositories]]
+# namespace = "your-team-namespace"
+# workload = "your-service"
+# path = "~/Development/your-service"
