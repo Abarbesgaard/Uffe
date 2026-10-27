@@ -35,7 +35,8 @@ It never relocates, restarts or sends to an existing agent automatically.
 
 ## Interaction
 
-- Up/Down: select a pod; Left/Right: choose environment. Selection follows resource
+- Tab: move between pods and live logs; the blue border and focus label show the active area.
+- Up/Down: select a pod or log in the active area; Left/Right: choose environment. Selection follows resource
   identity through refreshes and remains highlighted when viewing logs.
 - `l`: filter logs to the selected pod; `a`: show all logs in the current scope.
 - `/`: search; `0`/`1`/`2`/`3`: all/first/second/third configured namespace.
@@ -46,9 +47,12 @@ It never relocates, restarts or sends to an existing agent automatically.
   Warning/error history is retained independently from noisy info traffic.
   `f` expands logs.
 - `c`: capture the selected resource with a bounded log excerpt and add a note.
-- In the log inspector (`v`), use Up/Down to choose an entry, `v` to mark/unmark
-  several entries, then `s` to annotate, preview and choose an agent. `c` saves a
-  note without opening the send flow. Entries stay frozen while marking them.
+- Tab into live logs, use Up/Down to choose an entry, `v` to mark/unmark several
+  entries, then `s` to annotate, preview and choose an agent. The selected line is
+  highlighted with ▶ and marked lines have ●. Entries freeze while selecting;
+  collection continues in the background. Tab returns to pods and resumes the feed.
+- Ctrl+L opens the larger frozen log inspector with the same mark/send controls.
+  In that inspector, `c` saves a note without opening the send flow.
 - In resource details and events, capture the selected evidence.
 - `n`: pending notes, edit/remove them, preview the full request, then choose an agent.
 - `s`: preview the request and pick an existing agent. Clipboard copy is also available.

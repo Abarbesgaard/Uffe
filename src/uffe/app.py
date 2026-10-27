@@ -17,7 +17,7 @@ from .config import Config
 from .herdr import Agent, HandoffError, Herdr, UncertainDelivery, clipboard
 from .model import Evidence, KubeEvent, Note, Resource, capture, format_notes, utcnow
 from .screens import (AgentPicker, ConfirmQuit, DetailsScreen, EventsScreen, EvidenceEditor,
-                      HelpScreen, LogsScreen, NotesScreen, ReviewRequest)
+                      HelpScreen, LogSelection, LogsScreen, NotesScreen, ReviewRequest)
 
 
 class UffeApp(App):
@@ -37,6 +37,8 @@ class UffeApp(App):
     .environment.active .summary { border: round #89b4fa; }
     .resources { height: 2fr; min-height: 5; max-height: 18; border: round #454d68; }
     .environment.active .resources { border: round #89b4fa; }
+    .environment.logs-active .resources { border: round #454d68; }
+    .environment.logs-active .logs { border: round #89b4fa; }
     DataTable { background: #11131c; }
     DataTable > .datatable--header { background: #20273b; color: #89b4fa; text-style: bold; }
     DataTable > .datatable--cursor { background: #334d76; color: #ffffff; text-style: bold; }
@@ -67,6 +69,7 @@ class UffeApp(App):
         Binding("down,j", "resource(1)", "Select pod", priority=True, show=False),
         Binding("left", "environment(-1)", "Environment", priority=True, show=False),
         Binding("right", "environment(1)", "Environment", priority=True, show=False),
+        Binding("tab,shift+tab", "focus_region", "Pods / logs", priority=True),
         Binding("enter", "details", "Details", priority=True),
         Binding("l", "logs", "Logs", priority=True),
         Binding("a", "all_logs", "All logs", show=False),
@@ -85,7 +88,8 @@ class UffeApp(App):
         Binding("i", "level('info')", "Information", show=False),
         Binding("x", "level('error')", "Errors", show=False),
         Binding("f", "expand", "Expand logs", show=False),
-        Binding("v", "inspect_logs", "Log inspector", show=False),
+        Binding("v", "mark_log", "Mark log", show=False),
+        Binding("ctrl+l", "inspect_logs", "Log inspector", show=False),
         Binding("e", "events", "Events"),
         Binding("c", "capture", "Capture"),
         Binding("n", "notes", "Notes"),
@@ -107,6 +111,10 @@ class UffeApp(App):
         self.namespace = ""
         self.query_text = ""
         self.follow_pod = False
+        self.focus_region = "pods"
+        self.log_cursor = {e.context: 0 for e in config.environments}
+        self.marked_logs = {}
+        self.paused_before_selection = False
         self.warnings = False
         self.log_level = "all"
         self.paused = False
@@ -130,7 +138,7 @@ class UffeApp(App):
         with Horizontal(id="masthead"):
             yield Static(Text(BANNER.strip("\n")), id="brand")
             yield Static("READ-ONLY KUBERNETES VIEW\nObserve → capture → annotate → choose agent → draft\n"
-                         "Live logs newest first · arrows always select pods\n" +
+                         "Live logs newest first · Tab moves between pods and logs\n" +
                          ("OFFLINE DEMO · synthetic records" if self.demo else "Your kubeconfig · no cluster mutations"), id="intro")
         with Horizontal(id="filters"):
             yield Input(placeholder="/ search pods and logs", id="search")
@@ -166,7 +174,7 @@ class UffeApp(App):
     def check_action(self, action, parameters):
         if len(self.screen_stack) > 1:
             return False
-        if isinstance(self.focused, Input) and action not in ("clear", "search"):
+        if isinstance(self.focused, Input) and action not in ("clear", "search", "focus_region"):
             return False
         return True
 
@@ -210,6 +218,7 @@ class UffeApp(App):
         for i, env in enumerate(self.config.environments):
             panel = self.query_one(f"#env-{i}")
             panel.set_class(i == self.active_env, "active")
+            panel.set_class(i == self.active_env and self.focus_region == "logs", "logs-active")
             scopes = [s for (c, n), s in self.backend.scopes.items() if c == env.context and (not self.namespace or n == self.namespace)]
             missing = any(s.observed_at is None for s in scopes)
             failed = any(s.error for s in scopes)
@@ -249,21 +258,26 @@ class UffeApp(App):
             self.offsets[env.context] = min(self.offsets[env.context], max(0, len(entries)-1))
             offset = self.offsets[env.context]
             widget = self.query_one(f"#logs-{i}", Static)
-            widget.border_title = ("PAUSED" if self.paused else "LIVE LOGS") + " · NEWEST FIRST"
+            widget.border_title = ("SELECT LOGS · ↑/↓ choose · v mark · s send" if self.focus_region == "logs" and i == self.active_env else
+                                   ("PAUSED" if self.paused else "LIVE LOGS") + " · NEWEST FIRST")
             level_label = {"all": "all levels", "info": "information", "warn": "warning", "error": "error", "problems": "warning + error"}[self.log_level]
             widget.border_subtitle = level_label + (" · selected resource" if self.follow_pod else " · scope")
             text = Text()
             capacity = max(2, widget.size.height-3)
             used = 0
-            for record in entries[offset:offset+max(1, capacity//3)]:
+            for position, record in enumerate(entries[offset:offset+max(1, capacity//3)], offset):
                 clock = record.at.astimezone(self.tz).strftime("%H:%M:%S")
-                text.append(f"{clock} {record.level.upper():5} {record.pod}/{record.container}\n",
-                            style="bold #f38ba8" if record.level == "error" else "bold #f9e2af" if record.level == "warn" else "bold #89b4fa")
+                selected_log = self.focus_region == "logs" and i == self.active_env and position == self.log_cursor[env.context]
+                marker = "●" if record.id in self.marked_logs else " "
+                prefix = "▶" if selected_log else " "
+                style = "bold white on #334d76" if selected_log else "bold #f38ba8" if record.level == "error" else "bold #f9e2af" if record.level == "warn" else "bold #89b4fa"
+                text.append(f"{prefix}{marker} {clock} {record.level.upper():5} {record.pod}/{record.container}\n", style=style)
                 message = record.message.replace("\n", " ↵ ")
                 width = max(10, widget.size.width-4)
                 if len(message) > width:
                     message = message[:width-1]+"…"
-                text.append("  "+message+"\n\n")
+                text.append("   "+message+"\n", style="white on #334d76" if selected_log else "")
+                text.append("\n")
                 used += 1
             if not entries:
                 text.append("No matching buffered records. New entries appear automatically.\n\n"
@@ -273,7 +287,8 @@ class UffeApp(App):
             self.query_one(f"#log-status-{i}", Static).update(Text(f"{stream} · {offset+1 if entries else 0}–{offset+used}/{len(entries)} · PgUp/PgDn history · Home latest"))
         scope_text = self.namespace or "All namespaces"
         self.query_one("#scope", Static).update(Text(f"0 all · 1–3 namespace · {scope_text}"))
-        self.query_one("#status", Static).update(Text(f"{len(self.notes)} pending note(s) · {self.status_text}"))
+        navigation = "LOGS · ↑/↓ select · v mark/unmark · s send · Tab returns to pods" if self.focus_region == "logs" else "PODS · ↑/↓ select · Tab moves down to live logs"
+        self.query_one("#status", Static).update(Text(f"{navigation} · {len(self.marked_logs)} marked\n{len(self.notes)} pending note(s) · {self.status_text}"))
 
     @on(DataTable.RowHighlighted)
     def highlighted(self, event: DataTable.RowHighlighted):
@@ -287,6 +302,9 @@ class UffeApp(App):
             self.selected[context], self.selected_objects[context] = resource.key, resource
 
     def action_resource(self, delta: int):
+        if self.focus_region == "logs":
+            self.move_log(delta)
+            return
         context = self.environment.context
         rows = self.resource_rows.get(context, ())
         if rows:
@@ -298,6 +316,50 @@ class UffeApp(App):
             table = self.query_one(f"#resources-{self.active_env}", DataTable)
             table.focus()
             table.move_cursor(row=rows.index(resource), animate=False)
+
+    def action_focus_region(self):
+        if self.focus_region == "pods":
+            self.focus_region = "logs"
+            self.paused_before_selection = self.paused
+            if not self.paused:
+                self.action_pause()
+            self.status_text = "Log selection is frozen while new entries continue collecting. v marks; s prepares a draft."
+            self.set_focus(None)
+            self.log_cursor[self.environment.context] = 0
+            self.offsets[self.environment.context] = 0
+        else:
+            self.focus_region = "pods"
+            if not self.paused_before_selection:
+                self.paused = False
+            self.query_one(f"#resources-{self.active_env}").focus()
+        self.paint_data()
+
+    def move_log(self, delta: int):
+        context = self.environment.context
+        entries = self.logs_for(context)
+        self.log_cursor[context] = max(0, min(len(entries)-1, self.log_cursor[context]+delta)) if entries else 0
+        widget = self.query_one(f"#logs-{self.active_env}", Static)
+        visible_count = max(1, (widget.size.height-3)//3)
+        if self.log_cursor[context] < self.offsets[context]:
+            self.offsets[context] = self.log_cursor[context]
+        elif self.log_cursor[context] >= self.offsets[context]+visible_count:
+            self.offsets[context] = self.log_cursor[context]-visible_count+1
+        self.paint_data()
+
+    def selected_log(self):
+        entries = self.logs_for(self.environment.context)
+        return entries[min(self.log_cursor[self.environment.context], len(entries)-1)] if entries else None
+
+    def action_mark_log(self):
+        if self.focus_region != "logs":
+            self.action_focus_region()
+        record = self.selected_log()
+        if record:
+            if record.id in self.marked_logs:
+                del self.marked_logs[record.id]
+            else:
+                self.marked_logs[record.id] = record
+            self.paint_data()
 
     def action_environment(self, delta: int):
         self.active_env = (self.active_env+delta) % len(self.config.environments)
@@ -314,7 +376,7 @@ class UffeApp(App):
     def action_logs(self):
         self.follow_pod = True
         self.offsets[self.environment.context] = 0
-        self.status_text = "Following selected resource · ↑/↓ keeps selecting pods · v inspects individual log records"
+        self.status_text = "Following selected resource · Tab selects live logs · v marks entries · s prepares a draft"
         self.paint_data()
 
     def action_all_logs(self):
@@ -329,6 +391,7 @@ class UffeApp(App):
         self.namespace = namespaces[index-1] if index else ""
         self.follow_pod = False
         self.offsets = {e.context: 0 for e in self.config.environments}
+        self.log_cursor = {e.context: 0 for e in self.config.environments}
         self.selected.clear()
         self.selected_objects.clear()
         self.paint_data()
@@ -357,6 +420,7 @@ class UffeApp(App):
         self.paint_data()
 
     def action_latest(self):
+        self.focus_region = "pods"
         self.paused = False
         self.offsets = {e.context: 0 for e in self.config.environments}
         self.paint_data()
@@ -372,6 +436,7 @@ class UffeApp(App):
         self.log_level = level
         self.warnings = level != "all"
         self.offsets = {e.context: 0 for e in self.config.environments}
+        self.log_cursor = {e.context: 0 for e in self.config.environments}
         selector = self.query_one("#level", Select)
         if selector.value != level:
             selector.value = level
@@ -425,6 +490,12 @@ class UffeApp(App):
         self.status_text = "Frozen note saved · n reviews notes · s prepares agent handoff"
 
     def action_details(self):
+        if self.focus_region == "logs":
+            record = self.selected_log()
+            if record:
+                self.push_screen(DetailsScreen(record.pod+" / "+record.container, record.raw),
+                                 lambda result: self.captured_logs(self.resource, LogSelection((record,))) if result else None)
+            return
         resource = self.resource
         if resource:
             evidence = self.evidence(resource)
@@ -466,7 +537,8 @@ class UffeApp(App):
             def saved(note):
                 self.saved_note(note)
                 if note and selection.draft:
-                    self.action_send()
+                    self.marked_logs.clear()
+                    self.review_notes()
             self.push_screen(EvidenceEditor(evidence), saved)
 
     def action_notes(self):
@@ -482,9 +554,17 @@ class UffeApp(App):
         elif action == "edit" and note:
             self.push_screen(EvidenceEditor(note.evidence, note), self.saved_note)
         elif action == "send":
-            self.action_send()
+            self.review_notes()
 
     def action_send(self):
+        if self.focus_region == "logs" and not self.notes:
+            records = tuple(self.marked_logs.values()) or ((self.selected_log(),) if self.selected_log() else ())
+            if records:
+                self.captured_logs(self.resource, LogSelection(records, draft=True))
+                return
+        self.review_notes()
+
+    def review_notes(self):
         if self.sending:
             return
         if not self.notes:

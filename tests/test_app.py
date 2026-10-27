@@ -82,11 +82,13 @@ async def test_v_mark_multiple_then_s_drafts_exact_records():
     app = UffeApp(demo_config(), demo=True, allow_demo_handoff=True, host=host)
     async with app.run_test(size=(170, 55)) as pilot:
         app.backend.tick()
-        await pilot.press('v')
-        assert isinstance(app.screen, LogsScreen)
-        original_ids = {r.id for r in app.screen.records[:2]}
+        original_ids = {r.id for r in app.logs_for('demo-prod')[:2]}
+        original_pod = app.resource.key
+        await pilot.press('tab')
+        assert app.focus_region == 'logs'
         await pilot.press('v', 'down', 'v')
-        assert app.screen.marked == original_ids
+        assert set(app.marked_logs) == original_ids
+        assert app.resource.key == original_pod
         app.backend.tick()
         await pilot.press('s')
         assert isinstance(app.screen, EvidenceEditor)
@@ -152,7 +154,7 @@ async def test_logs_inspector_preserves_selection_and_multi_capture():
     app = UffeApp(demo_config(), demo=True)
     async with app.run_test(size=(170, 55)) as pilot:
         app.backend.tick()
-        await pilot.press("v")
+        await pilot.press("ctrl+l")
         assert isinstance(app.screen, LogsScreen)
         frozen = app.screen.records
         app.backend.tick()

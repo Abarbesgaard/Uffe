@@ -302,12 +302,12 @@ class HelpScreen(ModalScreen[None]):
         with Vertical(classes="dialog"):
             yield Label("UFFE · READ-ONLY CONTROLS", classes="dialog-title")
             with VerticalScroll():
-                yield Static("↑/↓  Select resource (selection remains visible)\n←/→  Choose environment\n"
+                yield Static("Tab  Switch between pods and live log selection\n↑/↓  Select a pod or log in the active area\n←/→  Choose environment\n"
                     "Enter  Resource details\nl  Filter logs to selected pod/workload\na  All logs in scope\n"
                     "p  Pods / deployments\n0–3  Namespace filter\n/  Search\nEsc  Clear filters / close dialog\n"
                     "PageUp/PageDown  Log history\nSpace  Pause/resume\nHome  Follow latest\n"
                     "i / w / x  Information / Warning / Error (repeat to return to All)\nf  Expand logs\n"
-                    "v  Frozen log inspector; v marks/unmarks entries, s drafts selected entries\n"
+                    "v  Mark/unmark a log entry (move to logs first with Tab)\nCtrl+L  Large log inspector\ns  Annotate and draft marked/selected logs to an agent\n"
                     "e  Kubernetes events\nc  Capture resource and annotate\nn  Pending notes\n"
                     "s  Preview request, choose agent, draft without submission\nr  Refresh health (read-only)\n"
                     "?  Help\nq  Quit\n\n"
