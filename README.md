@@ -45,15 +45,22 @@ It never relocates, restarts or sends to an existing agent automatically.
 - Log level selector: All, Information, Warning, Error, or Warning + Error.
   `i`, `w`, `x` toggle Information, Warning, or Error respectively; `a` shows all.
   Warning/error history is retained independently from noisy info traffic.
+  `b` shows warnings and errors together; press it again to return to all levels.
   `f` expands logs.
 - `c`: capture the selected resource with a bounded log excerpt and add a note.
 - Tab into live logs, use Up/Down to choose an entry, `v` to mark/unmark several
-  entries, then `s` to annotate, preview and choose an agent. The selected line is
+  entries, then `s` to preview a compact, editable request. Press Enter to confirm,
+  then Enter to choose the highlighted agent and draft. The selected line is
   highlighted with ▶ and marked lines have ●. Entries freeze while selecting;
   collection continues in the background. Tab returns to pods and resumes the feed.
 - Ctrl+L opens the larger frozen log inspector with the same mark/send controls.
   In that inspector, `c` saves a note without opening the send flow.
 - In resource details and events, capture the selected evidence.
+- In the instruction field, Enter saves the note; Shift+Enter or Ctrl+J adds a line.
+  Ctrl+S saves from either field. In the request preview, Enter opens the agent picker;
+  Enter on the selected agent drafts the request without submitting it.
+  Log handoffs include messages, exception summaries and logger categories rather
+  than full JSON and stack traces. Original logs remain available in the viewer.
 - `n`: pending notes, edit/remove them, preview the full request, then choose an agent.
 - `s`: preview the request and pick an existing agent. Clipboard copy is also available.
 - `?`: help. `q`: quit (pending notes require an explicit discard).
@@ -90,13 +97,25 @@ export works. Clipboard support uses pbcopy, wl-copy, xclip or xsel when present
 ```sh
 uv sync --group dev
 uv run pytest
+uv run ruff format --check .
 uv run ruff check .
 uv build
 ```
 
-GitHub Actions runs these checks on every push to `main`, on pull requests, and
-through manual dispatch. The matrix covers Linux/macOS and Python 3.11/3.12,
-including installation and execution of the built wheel.
+GitHub Actions (`.github/workflows/ci.yml`) runs a staged pipeline on pushes to
+`main`, pull requests and manual dispatch. Formatting, ruff and unused-dependency
+checks (deptry) gate the test matrix (Linux/macOS, Python 3.11–3.13) and the wheel
+build and smoke test. Pull requests also get mutation testing (mutmut) on the
+changed modules and a similar-code report (`scripts/similar-code.sh`); both
+only report and never fail. Workflow changes are checked with zizmor. Dependency
+changes are checked with pip-audit, which also runs daily (`audit.yml`).
+
+To release, bump `version` in both `pyproject.toml` and `herdr-plugin.toml` and
+merge to `main`. `auto-tag.yml` tags `vX.Y.Z` and calls `release.yml`, which
+attaches the wheel, sdist and checksums to a GitHub Release, and publishes to
+PyPI if the `PYPI_API_TOKEN` secret is set. No PAT is needed: the tag is pushed
+with `GITHUB_TOKEN` and the release is called directly rather than triggered by
+the tag push. Pushing a `v*` tag by hand also releases.
 
 For just the isolated model/configuration/handoff unit tests, run
 `uv run pytest tests/test_core.py tests/test_units.py`. The full suite also checks

@@ -224,6 +224,7 @@ name = "uffe"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "rich" },
     { name = "textual" },
 ]
 
@@ -236,7 +237,10 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "textual", specifier = ">=6,<9" }]
+requires-dist = [
+    { name = "rich", specifier = ">=13.3.3" },
+    { name = "textual", specifier = ">=6,<9" },
+]
 
 [package.metadata.requires-dev]
 dev = [

@@ -30,9 +30,9 @@ async def test_arrow_keys_still_select_pods_after_logs():
 async def test_all_levels_feed_includes_info_records():
     app = UffeApp(demo_config(), demo=True)
     async with app.run_test(size=(170, 55)):
-        app.backend.logs.append('demo-prod', line('ordinary info', level='info'))
+        app.backend.logs.append("demo-prod", line("ordinary info", level="info"))
         assert not app.warnings
-        assert any(r.message == 'ordinary info' for r in app.logs_for('demo-prod'))
+        assert any(r.message == "ordinary info" for r in app.logs_for("demo-prod"))
 
 
 @pytest.mark.asyncio
@@ -40,15 +40,15 @@ async def test_namespace_change_clears_pod_filter_without_losing_buffer():
     app = UffeApp(demo_config(), demo=True)
     async with app.run_test(size=(170, 55)) as pilot:
         original_count = len(app.backend.logs.records)
-        await pilot.press('l', '2')
+        await pilot.press("l", "2")
         assert not app.follow_pod
-        assert app.namespace == 'support'
-        assert app.logs_for('demo-prod')
-        await pilot.press('1')
-        assert app.namespace == 'payments'
-        assert app.logs_for('demo-prod')
-        await pilot.press('0')
-        assert {r.namespace for r in app.logs_for('demo-prod')} == {'payments', 'support'}
+        assert app.namespace == "support"
+        assert app.logs_for("demo-prod")
+        await pilot.press("1")
+        assert app.namespace == "payments"
+        assert app.logs_for("demo-prod")
+        await pilot.press("0")
+        assert {r.namespace for r in app.logs_for("demo-prod")} == {"payments", "support"}
         assert len(app.backend.logs.records) >= original_count
 
 
@@ -56,24 +56,32 @@ async def test_namespace_change_clears_pod_filter_without_losing_buffer():
 async def test_warning_toggles_survive_info_flood_and_reset_history():
     app = UffeApp(demo_config(), demo=True)
     async with app.run_test(size=(170, 55)) as pilot:
-        expected = {r.id for r in app.logs_for('demo-prod')}
-        await pilot.press('w')
-        assert app.log_level == 'warn'
-        assert {r.id for r in app.logs_for('demo-prod')} == expected
-        await pilot.press('w')
-        assert app.log_level == 'all'
+        expected = {r.id for r in app.logs_for("demo-prod")}
+        await pilot.press("w")
+        assert app.log_level == "warn"
+        assert {r.id for r in app.logs_for("demo-prod")} == expected
+        await pilot.press("w")
+        assert app.log_level == "all"
         for index in range(5010):
-            app.backend.logs.append('demo-prod', line(str(index), level='info'))
-        app.offsets['demo-prod'] = 100
-        await pilot.press('w')
-        assert app.log_level == 'warn'
-        assert {r.id for r in app.logs_for('demo-prod')} == expected
-        assert app.offsets['demo-prod'] == 0
-        await pilot.press('i')
-        assert app.log_level == 'info' and all(r.level == 'info' for r in app.logs_for('demo-prod'))
-        app.backend.logs.append('demo-prod', line('an error', level='error'))
-        await pilot.press('x')
-        assert app.log_level == 'error' and {r.message for r in app.logs_for('demo-prod')} == {'an error'}
+            app.backend.logs.append("demo-prod", line(str(index), level="info"))
+        app.offsets["demo-prod"] = 100
+        await pilot.press("w")
+        assert app.log_level == "warn"
+        assert {r.id for r in app.logs_for("demo-prod")} == expected
+        assert app.offsets["demo-prod"] == 0
+        await pilot.press("i")
+        assert app.log_level == "info" and all(r.level == "info" for r in app.logs_for("demo-prod"))
+        app.backend.logs.append("demo-prod", line("an error", level="error"))
+        await pilot.press("x")
+        assert app.log_level == "error" and {r.message for r in app.logs_for("demo-prod")} == {"an error"}
+        await pilot.press("b")
+        assert app.log_level == "problems"
+        assert {r.id for r in app.logs_for("demo-prod") if r.level == "warn"} == expected
+        assert {r.message for r in app.logs_for("demo-prod") if r.level == "error"} == {"an error"}
+        assert {r.level for r in app.logs_for("demo-prod")} == {"warn", "error"}
+        await pilot.press("b")
+        assert app.log_level == "all"
+        assert any(r.level == "info" for r in app.logs_for("demo-prod"))
 
 
 @pytest.mark.asyncio
@@ -82,26 +90,23 @@ async def test_v_mark_multiple_then_s_drafts_exact_records():
     app = UffeApp(demo_config(), demo=True, allow_demo_handoff=True, host=host)
     async with app.run_test(size=(170, 55)) as pilot:
         app.backend.tick()
-        original_ids = {r.id for r in app.logs_for('demo-prod')[:2]}
+        original_ids = {r.id for r in app.logs_for("demo-prod")[:2]}
         original_pod = app.resource.key
-        await pilot.press('tab')
-        assert app.focus_region == 'logs'
-        await pilot.press('v', 'down', 'v')
+        await pilot.press("tab")
+        assert app.focus_region == "logs"
+        await pilot.press("v", "down", "v")
         assert set(app.marked_logs) == original_ids
         assert app.resource.key == original_pod
         app.backend.tick()
-        await pilot.press('s')
-        assert isinstance(app.screen, EvidenceEditor)
-        app.screen.query_one('#instruction', TextArea).load_text('Explain these two selected entries')
-        await pilot.click('#save')
+        await pilot.press("s")
         assert isinstance(app.screen, ReviewRequest)
-        assert app.screen.payload.count('Synthetic request timed out') == 2
-        await pilot.click('#choose')
+        assert app.screen.payload.count("Synthetic request timed out") == 2
+        await pilot.press("enter")
         await wait_for(lambda: isinstance(app.screen, AgentPicker), pilot)
-        await pilot.press('enter')
+        await pilot.press("enter")
         await wait_for(lambda: len(host.sent) == 1 and not app.sending, pilot)
         assert not app.notes
-        assert host.sent[0].count('Synthetic request timed out') == 2
+        assert host.sent[0].count("Synthetic request timed out") == 2
 
 
 @pytest.mark.asyncio
@@ -112,10 +117,14 @@ async def test_selection_identity_survives_sort_and_disappearance():
         key = (selected.context, selected.namespace)
         scope = app.backend.scopes[key]
         changed = replace(selected, name="aaa-sort-first")
-        app.backend.scopes[key] = replace(scope, resources=tuple(changed if r.key == selected.key else r for r in scope.resources))
+        app.backend.scopes[key] = replace(
+            scope, resources=tuple(changed if r.key == selected.key else r for r in scope.resources)
+        )
         app.paint_data()
         assert app.resource.uid == selected.uid
-        app.backend.scopes[key] = replace(scope, resources=tuple(r for r in scope.resources if r.key != selected.key))
+        app.backend.scopes[key] = replace(
+            scope, resources=tuple(r for r in scope.resources if r.key != selected.key)
+        )
         app.paint_data()
         assert app.resource.uid == selected.uid
         assert "disappeared" in app.query_one("#resources-0", DataTable).border_subtitle
@@ -196,12 +205,64 @@ class Host:
         return Delivery(target.name, self.failure != "focus")
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("inspector", [False, True])
+async def test_mark_send_enter_enter_drafts_edited_compact_message_with_fake_host(inspector):
+    host = Host()
+    app = UffeApp(demo_config(), demo=True, allow_demo_handoff=True, host=host)
+    async with app.run_test(size=(170, 55)) as pilot:
+        await pilot.press("ctrl+l" if inspector else "tab", "v", "s")
+        assert isinstance(app.screen, ReviewRequest)
+        frozen = app.notes[0].evidence
+        payload = app.screen.query_one("#payload", TextArea)
+        edited = payload.text.replace(
+            "Investigate these logs", "Use Splunk and GitHub to investigate these logs"
+        )
+        payload.load_text(edited)
+        payload.focus()
+        payload.move_cursor((0, 0))
+        await pilot.press("ctrl+j")
+        edited = "\n" + edited
+        assert payload.text == edited
+        app.backend.tick()
+        assert app.notes[0].evidence == frozen
+        assert host.sent == []
+        await pilot.press("enter")
+        await wait_for(lambda: isinstance(app.screen, AgentPicker), pilot)
+        assert host.sent == []
+        await pilot.press("enter")
+        await wait_for(lambda: len(host.sent) == 1 and not app.sending, pilot)
+        assert not app.notes
+        assert host.sent[0] == edited
+
+
+@pytest.mark.asyncio
+async def test_instruction_newline_and_excerpt_enter_remain_editable():
+    app = UffeApp(demo_config(), demo=True)
+    async with app.run_test(size=(170, 55)) as pilot:
+        await pilot.press("c")
+        instruction = app.screen.query_one("#instruction", TextArea)
+        await pilot.press(*"First", "shift+enter", *"Second")
+        assert instruction.text == "First\nSecond"
+        excerpt = app.screen.query_one("#excerpt", TextArea)
+        excerpt.focus()
+        excerpt.load_text("Evidence")
+        excerpt.move_cursor((0, len("Evidence")))
+        await pilot.press("enter", *"More")
+        assert isinstance(app.screen, EvidenceEditor)
+        assert excerpt.text == "Evidence\nMore"
+        await pilot.press("ctrl+s")
+        assert app.notes[0].instruction == "First\nSecond"
+        assert app.notes[0].evidence.excerpt == "Evidence\nMore"
+        app.notes.clear()
+
+
 async def wait_for(predicate, pilot, timeout=3):
     start = time.monotonic()
     while not predicate():
-        if time.monotonic()-start > timeout:
+        if time.monotonic() - start > timeout:
             raise AssertionError("Timed out waiting for UI state")
-        await pilot.pause(.02)
+        await pilot.pause(0.02)
 
 
 @pytest.mark.asyncio
@@ -229,12 +290,13 @@ async def test_demo_never_discovers_agent_without_optin():
     class ForbiddenHost:
         def discover(self):
             raise AssertionError("must not discover real agents in the offline demo")
+
     app = UffeApp(demo_config(), demo=True, host=ForbiddenHost())
     async with app.run_test(size=(150, 50)) as pilot:
         app.notes.append(Note("Demo", capture(app.resource, ())))
         await pilot.press("s")
         await pilot.click("#choose")
-        await pilot.pause(.1)
+        await pilot.pause(0.1)
         assert len(app.notes) == 1
         app.notes.clear()
 
@@ -248,9 +310,9 @@ async def test_background_latency_does_not_block_keyboard():
         before = app.resource.key
         start = time.monotonic()
         app.action_resource(1)
-        elapsed = time.monotonic()-start
+        elapsed = time.monotonic() - start
         assert app.resource.key != before
-        assert elapsed < .1
+        assert elapsed < 0.1
         await pilot.press("space")
         frozen = app.frozen
         app.backend.tick()
@@ -288,16 +350,17 @@ async def test_failed_context_keeps_previous_data_visible():
 async def test_discover_is_background_and_notes_survive():
     class SlowHost:
         def discover(self):
-            time.sleep(.3)
+            time.sleep(0.3)
             raise HandoffError("no connection")
+
     app = UffeApp(demo_config(), demo=True, host=SlowHost(), allow_demo_handoff=True)
     async with app.run_test(size=(170, 55)) as pilot:
         app.notes.append(Note("Investigate", capture(app.resource, ())))
         app.discover_agents(tuple(app.notes), "payload")
-        await asyncio.sleep(.02)
+        await asyncio.sleep(0.02)
         before = app.resource.key
         app.action_resource(1)
         assert app.resource.key != before
-        await pilot.pause(.4)
+        await pilot.pause(0.4)
         assert len(app.notes) == 1
         app.notes.clear()

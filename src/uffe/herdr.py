@@ -1,4 +1,5 @@
 """Agent discovery and explicit draft-only handoff; no prompt submission."""
+
 from dataclasses import dataclass
 import json
 import os
@@ -59,10 +60,18 @@ class Herdr:
     def discover(self) -> tuple[Agent, ...]:
         agents = self.raw_agents()
         workspaces, tabs = {}, {}
-        for command, key, target in ((["workspace", "list"], "workspaces", workspaces), (["tab", "list"], "tabs", tabs)):
+        for command, key, target in (
+            (["workspace", "list"], "workspaces", workspaces),
+            (["tab", "list"], "tabs", tabs),
+        ):
             try:
                 items = json.loads(self.call(command))["result"][key]
-                target.update({i["workspace_id" if key == "workspaces" else "tab_id"]: i.get("label", "") for i in items})
+                target.update(
+                    {
+                        i["workspace_id" if key == "workspaces" else "tab_id"]: i.get("label", "")
+                        for i in items
+                    }
+                )
             except (OSError, ValueError, KeyError, HandoffError, subprocess.TimeoutExpired):
                 pass
         result = []
@@ -70,10 +79,19 @@ class Herdr:
             if not item.get("agent") or item.get("pane_id") == os.environ.get("HERDR_PANE_ID"):
                 continue
             try:
-                result.append(Agent(item["pane_id"], item.get("name") or item.get("display_agent") or item["agent"],
-                    item["agent"], item.get("agent_status", "unknown"), item["workspace_id"],
-                    workspaces.get(item["workspace_id"], item["workspace_id"]), tabs.get(item["tab_id"], item["tab_id"]),
-                    item.get("cwd", ""), json.dumps(item.get("agent_session"), sort_keys=True)))
+                result.append(
+                    Agent(
+                        item["pane_id"],
+                        item.get("name") or item.get("display_agent") or item["agent"],
+                        item["agent"],
+                        item.get("agent_status", "unknown"),
+                        item["workspace_id"],
+                        workspaces.get(item["workspace_id"], item["workspace_id"]),
+                        tabs.get(item["tab_id"], item["tab_id"]),
+                        item.get("cwd", ""),
+                        json.dumps(item.get("agent_session"), sort_keys=True),
+                    )
+                )
             except KeyError:
                 continue
         current = os.environ.get("HERDR_WORKSPACE_ID")
@@ -81,13 +99,20 @@ class Herdr:
 
     def draft(self, target: Agent, text: str) -> Delivery:
         current = next((a for a in self.raw_agents() if a.get("pane_id") == target.pane), None)
-        if (current is None or current.get("agent") != target.kind or current.get("workspace_id") != target.workspace or
-                json.dumps(current.get("agent_session"), sort_keys=True) != target.session or current.get("cwd", "") != target.cwd):
+        if (
+            current is None
+            or current.get("agent") != target.kind
+            or current.get("workspace_id") != target.workspace
+            or json.dumps(current.get("agent_session"), sort_keys=True) != target.session
+            or current.get("cwd", "") != target.cwd
+        ):
             raise HandoffError("The selected agent changed or closed; choose it again. Notes kept.")
         try:
             self.call(["pane", "send-text", target.pane, bracketed(text)], timeout=5)
         except subprocess.TimeoutExpired as error:
-            raise UncertainDelivery("Delivery is uncertain. Check the agent input before retrying; notes kept.") from error
+            raise UncertainDelivery(
+                "Delivery is uncertain. Check the agent input before retrying; notes kept."
+            ) from error
         except OSError as error:
             raise HandoffError("Could not reach herdr; notes kept") from error
         focused = True
@@ -99,7 +124,12 @@ class Herdr:
 
 
 def clipboard(text: str):
-    for binary, args in (("pbcopy", []), ("wl-copy", []), ("xclip", ["-selection", "clipboard"]), ("xsel", ["--clipboard", "--input"])):
+    for binary, args in (
+        ("pbcopy", []),
+        ("wl-copy", []),
+        ("xclip", ["-selection", "clipboard"]),
+        ("xsel", ["--clipboard", "--input"]),
+    ):
         executable = shutil.which(binary)
         if executable:
             try:

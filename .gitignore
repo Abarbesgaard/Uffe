@@ -8,3 +8,4 @@ dist/
 .sara/
 config.local.toml
 artifacts/
+mutants/

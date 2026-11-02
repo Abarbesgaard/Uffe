@@ -1,4 +1,5 @@
 """Uffe command line and optional explicitly addressed herdr workspace."""
+
 import argparse
 import json
 import os
@@ -24,7 +25,9 @@ def parser():
     result.add_argument("command", nargs="?", choices=("doctor", "workspace"))
     result.add_argument("--config", type=Path, default=default_path())
     result.add_argument("--demo", action="store_true", help="Offline synthetic data; no cluster access")
-    result.add_argument("--allow-demo-handoff", action="store_true", help="Explicitly enable herdr discovery/drafting in demo")
+    result.add_argument(
+        "--allow-demo-handoff", action="store_true", help="Explicitly enable herdr discovery/drafting in demo"
+    )
     result.add_argument("--version", action="version", version=f"Uffe {__version__}")
     result.add_argument("--banner", action="store_true", help="Print the Uffe ASCII art and exit")
     return result
@@ -50,7 +53,9 @@ def create_workspace(config: Path, demo: bool = False):
     call("pane", "run", pane, shlex.join(command))
     # No agent is chosen, started or messaged automatically.
     call("workspace", "focus", workspace)
-    print(f"Uffe workspace {workspace}; start your agent in the right pane or choose an existing agent when drafting.")
+    print(
+        f"Uffe workspace {workspace}; start your agent in the right pane or choose an existing agent when drafting."
+    )
 
 
 def main():
@@ -69,7 +74,9 @@ def main():
                 if not path and not args.demo:
                     missing.append(name)
             print(f"herdr: {shutil.which('herdr') or 'not found (clipboard-only handoff)'}")
-            print(f"Configuration: {len(config.environments)} environment(s), {len(config.namespaces)} namespace(s)")
+            print(
+                f"Configuration: {len(config.environments)} environment(s), {len(config.namespaces)} namespace(s)"
+            )
             print("Kubernetes operations: scoped GET reads only. No credential or cluster changes performed.")
             if missing:
                 raise ValueError("Missing dependencies: " + ", ".join(missing))
@@ -78,6 +85,7 @@ def main():
             create_workspace(args.config, args.demo)
             return
         from .app import UffeApp
+
         UffeApp(config, demo=args.demo, allow_demo_handoff=args.allow_demo_handoff).run()
     except (ValueError, OSError, subprocess.SubprocessError) as error:
         print(f"Uffe: {error}", file=sys.stderr)

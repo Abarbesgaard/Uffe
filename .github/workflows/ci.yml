@@ -1,31 +1,304 @@
-name: checks
+name: Python CI
+
+# One staged pipeline. Each stage starts only when the one before it passes:
+#
+#   changes ─┬─ lint: format, ruff, unused deps ─── test matrix, build ─── mutants (PRs)
+#            ├─ workflow security (zizmor), when .github/ changes
+#            ├─ dependency audit (pip-audit), when pyproject.toml/uv.lock change
+#            └─ similar code report (PRs; warnings only, never fails)
+#
+# Stages whose files did not change are skipped.
+
 on:
   push:
     branches: [main]
   pull_request:
+    branches: [main]
   workflow_dispatch:
+
 permissions:
   contents: read
+
 concurrency:
-  group: checks-${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
+
 jobs:
-  test:
+  changes:
+    name: Detect changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      python: ${{ steps.filter.outputs.python }}
+      deps: ${{ steps.filter.outputs.deps }}
+      workflows: ${{ steps.filter.outputs.workflows }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - id: filter
+        name: Classify changed files
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          if [ "$EVENT" != "pull_request" ]; then
+            printf 'python=true\ndeps=true\nworkflows=true\n' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git diff --name-only "origin/${BASE_REF}...HEAD" > changed.txt
+          cat changed.txt
+          has() { grep -qE "$1" changed.txt && echo true || echo false; }
+          {
+            echo "python=$(has '^(src/|tests/|herdr/|examples/|scripts/|pyproject\.toml$|uv\.lock$|herdr-plugin\.toml$|README\.md$|\.github/workflows/ci\.yml$)')"
+            echo "deps=$(has '^(pyproject\.toml|uv\.lock)$')"
+            echo "workflows=$(has '^\.github/')"
+          } | tee -a "$GITHUB_OUTPUT"
+
+  # ── Stage 1: fast checks ──────────────────────────────────────────────
+
+  fmt:
+    name: Formatting
+    needs: changes
+    if: needs.changes.outputs.python == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          enable-cache: false
+
+      - name: Check formatting
+        run: uv run --locked --group dev ruff format --check .
+
+  ruff:
+    name: Ruff
+    needs: changes
+    if: needs.changes.outputs.python == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          enable-cache: false
+
+      - name: Run ruff
+        run: uv run --locked --group dev ruff check --output-format=github .
+
+  unused-deps:
+    name: Unused dependencies
+    needs: changes
+    if: needs.changes.outputs.python == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          enable-cache: false
+
+      # Missing, unused and transitive-only imports against pyproject.toml.
+      - name: Run deptry
+        run: uv run --locked --no-dev --with deptry==0.25.1 deptry src
+
+  zizmor:
+    name: Workflow security
+    needs: changes
+    if: needs.changes.outputs.workflows == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: zizmorcore/zizmor-action@53290badfa369cb0bf7ad16342cb62c2fa47ac7b # v0.8.0
+        with:
+          advanced-security: false
+          annotations: true
+          min-severity: low
+
+  audit:
+    name: Dependency audit
+    needs: changes
+    if: needs.changes.outputs.deps == 'true'
+    runs-on: ubuntu-latest
     timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          enable-cache: false
+
+      # Known vulnerabilities (PyPA advisory DB / OSV) in every locked package.
+      - name: Run pip-audit
+        run: |
+          uv export --locked --all-groups --no-emit-project --format requirements-txt > requirements.txt
+          uvx pip-audit==2.10.1 -r requirements.txt --disable-pip --no-deps --strict
+
+  similarity:
+    name: Similar code (report only)
+    needs: changes
+    if: github.event_name == 'pull_request' && needs.changes.outputs.python == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Install similarity-py
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: v0.5.0
+        run: |
+          asset="similarity-${VERSION}-x86_64-unknown-linux-gnu"
+          gh release download "$VERSION" --repo mizchi/similarity \
+            --pattern "${asset}.tar.gz" --pattern SHA256SUMS.txt
+          grep " ${asset}.tar.gz\$" SHA256SUMS.txt | sha256sum --check -
+          tar xzf "${asset}.tar.gz"
+          echo "$PWD/${asset}" >> "$GITHUB_PATH"
+
+      # Annotates functions this PR adds or edits that look like an existing
+      # function, as a hint to reuse or extract a helper. Never fails the build.
+      - name: Report similar functions the PR changed
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          scripts/similar-code.sh "origin/${BASE_REF}" | tee report.txt
+          {
+            echo "### Similar code"
+            echo '```'
+            sed -E 's/^::warning file=([^,]+),line=([0-9]+),title=Similar code::/\1:\2: /' report.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ── Stage 2: tests and build, only once the fast checks pass ──────────
+
+  test:
+    name: Test
+    needs: [fmt, ruff, unused-deps]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
         os: [ubuntu-latest, macos-latest]
-        python: ["3.11", "3.12"]
-    runs-on: ${{ matrix.os }}
+        python: ["3.11", "3.12", "3.13"]
+        # Newest-Python compatibility rarely diverges by OS; only check it on ubuntu.
+        exclude:
+          - os: macos-latest
+            python: "3.13"
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           python-version: ${{ matrix.python }}
           enable-cache: true
-      - run: uv sync --locked --group dev
-      - run: uv run ruff check .
-      - run: uv run pytest
-      - run: uv build
-      - run: uv run --isolated --no-project --with dist/*.whl uffe --banner
+          save-cache: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Run tests
+        run: uv run --locked --group dev pytest
+
+  build:
+    name: Build
+    needs: [fmt, ruff, unused-deps]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          enable-cache: false
+
+      # herdr installs the plugin by herdr-plugin.toml's version; keep it in step.
+      - name: Check versions agree
+        run: |
+          py=$(grep -m1 '^version' pyproject.toml | sed 's/.*"\(.*\)".*/\1/')
+          plugin=$(grep -m1 '^version' herdr-plugin.toml | sed 's/.*"\(.*\)".*/\1/')
+          if [ "$py" != "$plugin" ]; then
+            echo "::error::pyproject.toml is $py but herdr-plugin.toml is $plugin."
+            exit 1
+          fi
+
+      - name: Build
+        run: uv build
+
+      - name: Smoke-test the wheel
+        run: uv run --isolated --no-project --with dist/*.whl uffe --banner
+
+  # ── Stage 3: mutation testing on the PR's diff, only once tests pass ──
+  # Each mutant is a small injected bug; a "survived" one means no test noticed
+  # it. A full run is slow, so this only mutates the modules the PR changes.
+  # Report only: survivors are annotated and summarised, never fail the build.
+  # Config: [tool.mutmut] in pyproject.toml.
+
+  mutants:
+    name: Mutants (PR diff)
+    needs: [test]
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          enable-cache: false
+
+      - name: Select changed modules
+        id: modules
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          patterns=$(git diff --name-only --diff-filter=AM "origin/${BASE_REF}...HEAD" -- 'src/uffe/*.py' \
+            | sed -E 's#^src/##; s#\.py$##; s#/#.#g; s#$#.*#' | tr '\n' ' ')
+          echo "Mutating: ${patterns:-nothing}"
+          echo "patterns=$patterns" >> "$GITHUB_OUTPUT"
+
+      - name: Mutants
+        if: steps.modules.outputs.patterns != ''
+        env:
+          PATTERNS: ${{ steps.modules.outputs.patterns }}
+        run: |
+          # shellcheck disable=SC2086 # one glob per changed module
+          uv run --locked --group dev --with mutmut==3.8.1 mutmut run $PATTERNS || true
+          uv run --locked --group dev --with mutmut==3.8.1 mutmut results 2>/dev/null \
+            | grep -E ': (survived|timeout|suspicious)$' | sed 's/^ *//' > survivors.txt || true
+          while IFS= read -r line; do
+            echo "::warning title=Mutant survived::$line"
+          done < survivors.txt
+          {
+            echo "### Mutants ($(wc -l < survivors.txt) survived)"
+            echo "Inspect one locally with \`uv run --with mutmut mutmut show <name>\`."
+            echo '```'
+            cat survivors.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Archive mutants
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always() && steps.modules.outputs.patterns != ''
+        with:
+          name: mutants
+          path: mutants/
+          if-no-files-found: ignore

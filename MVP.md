@@ -1,6 +1,6 @@
 # MVP contract
 
-Observe -> capture immutable evidence -> annotate -> preview -> select an existing
+Observe -> capture immutable evidence -> preview/edit -> select an existing
 agent pane -> draft without submission. The agent conversation stays in that pane.
 
 1. Kubernetes transport exposes only scoped GET reads. No mutation or exec action.
@@ -15,6 +15,10 @@ agent pane -> draft without submission. The agent conversation stays in that pan
 5. Capture freezes selected records and resource state. A note's content is never
    refreshed from live data. Excerpts are limited to 50 records and 32 KiB; omitted
    records/bytes are disclosed. Users can edit the excerpt and instruction.
+   Log handoffs default to compact messages with exception summaries and logger
+   categories; disclose omitted fields/stack traces and retain raw logs in the viewer.
+   Mark logs with v, press s for an editable request preview, Enter to confirm,
+   then Enter to choose an agent. No instruction-editor step is required.
 6. Agent picker always asks, includes all local-session agents, prioritizes the
    current workspace, shows location/state, and remembers the last successful target.
    Picker rows freeze while open. No agents are spawned by the app.

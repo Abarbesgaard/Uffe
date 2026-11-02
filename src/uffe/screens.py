@@ -1,16 +1,28 @@
 """Explicit evidence capture, review and destination choice."""
+
 from dataclasses import dataclass, replace
 import json
 
 from rich.text import Text
 from textual import on
 from textual.app import ComposeResult
+from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Button, DataTable, Label, Static, TextArea
 
 from .herdr import Agent
 from .model import Evidence, KubeEvent, LogEntry, Note
+
+
+class InstructionArea(TextArea):
+    BINDINGS = [
+        Binding("enter", "screen.save", "Save note", priority=True),
+        Binding("shift+enter,ctrl+j", "newline", "New line"),
+    ]
+
+    def action_newline(self):
+        self.replace("\n", *self.selection)
 
 
 class EvidenceEditor(ModalScreen[Note | None]):
@@ -24,16 +36,25 @@ class EvidenceEditor(ModalScreen[Note | None]):
     def compose(self) -> ComposeResult:
         with Vertical(id="editor", classes="dialog"):
             yield Label("CAPTURED EVIDENCE → YOUR INSTRUCTION", classes="dialog-title")
-            yield Static(Text(f"{self.evidence.context} / {self.evidence.namespace} / {self.evidence.resource_name}\n"
-                              f"Captured {self.evidence.captured_at.isoformat()} · UID {self.evidence.resource_uid}"))
+            yield Static(
+                Text(
+                    f"{self.evidence.context} / {self.evidence.namespace} / {self.evidence.resource_name}\n"
+                    f"Captured {self.evidence.captured_at.isoformat()} · UID {self.evidence.resource_uid}"
+                )
+            )
             yield Label("What should the agent investigate or propose?")
-            yield TextArea(self.note.instruction if self.note else "", id="instruction", soft_wrap=True)
+            yield InstructionArea(
+                self.note.instruction if self.note else "", id="instruction", soft_wrap=True
+            )
             yield Label(f"Editable log excerpt · omitted/truncated blocks: {self.evidence.omitted}")
             yield TextArea(self.evidence.excerpt, id="excerpt", soft_wrap=True)
             with Horizontal(classes="buttons"):
                 yield Button("Save note", id="save", variant="primary")
                 yield Button("Cancel", id="cancel")
-            yield Static("Frozen snapshot; live updates cannot change this evidence. Ctrl+S saves. Esc cancels.", classes="muted")
+            yield Static(
+                "Frozen snapshot. Enter saves instruction; Shift+Enter / Ctrl+J adds a line. Ctrl+S saves from any field. Esc cancels.",
+                classes="muted",
+            )
 
     def on_mount(self):
         self.query_one("#instruction").focus()
@@ -49,7 +70,11 @@ class EvidenceEditor(ModalScreen[Note | None]):
             self.notify("Instruction/excerpt too large (8 KiB / 40 KiB limits)", severity="warning")
             return
         evidence = replace(self.evidence, excerpt=excerpt)
-        self.dismiss(replace(self.note, instruction=instruction, evidence=evidence) if self.note else Note(instruction, evidence))
+        self.dismiss(
+            replace(self.note, instruction=instruction, evidence=evidence)
+            if self.note
+            else Note(instruction, evidence)
+        )
 
     @on(Button.Pressed, "#cancel")
     def action_cancel(self):
@@ -57,7 +82,11 @@ class EvidenceEditor(ModalScreen[Note | None]):
 
 
 class ReviewRequest(ModalScreen[str | None]):
-    BINDINGS = [("escape", "cancel", "Back")]
+    BINDINGS = [
+        Binding("enter", "confirm", "Choose agent", priority=True),
+        Binding("ctrl+j,shift+enter", "newline", "New line", show=False),
+        Binding("escape", "cancel", "Back"),
+    ]
 
     def __init__(self, payload: str, uncertain: bool = False):
         super().__init__()
@@ -68,19 +97,49 @@ class ReviewRequest(ModalScreen[str | None]):
         with Vertical(classes="dialog", id="request"):
             yield Label("REVIEW EXACT REQUEST", classes="dialog-title")
             if self.uncertain:
-                yield Static("Previous delivery was uncertain. Check that agent input first. Choosing again may duplicate the draft.", classes="warning")
-            yield Static("Logs are quoted evidence. Check their contents before sharing. The agent receives a draft; you submit it.", classes="muted")
-            yield TextArea(self.payload, read_only=True, id="payload", soft_wrap=True)
+                yield Static(
+                    "Previous delivery was uncertain. Check that agent input first. Choosing again may duplicate the draft.",
+                    classes="warning",
+                )
+            yield Static(
+                "Logs are quoted evidence. Check their contents before sharing. The agent receives a draft; you submit it.",
+                classes="muted",
+            )
+            yield TextArea(self.payload, id="payload", soft_wrap=True)
+            yield Static(
+                "Edit the message if needed. Enter confirms; Ctrl+J adds a line. Esc keeps your notes.",
+                classes="muted",
+            )
             with Horizontal(classes="buttons"):
                 yield Button("Choose agent…", id="choose", variant="primary")
                 yield Button("Copy", id="copy")
                 yield Button("Back", id="back")
 
+    def on_mount(self):
+        self.query_one("#choose", Button).focus()
+
     @on(Button.Pressed)
     def clicked(self, event: Button.Pressed):
+        self.payload = self.query_one("#payload", TextArea).text
+        if event.button.id in ("choose", "copy") and len(self.payload.encode()) > 131072:
+            self.notify("Message exceeds 128 KiB; shorten it before sending", severity="warning")
+            return
         self.dismiss({"choose": "choose", "copy": "copy"}.get(event.button.id))
 
+    def action_confirm(self):
+        focused = self.focused
+        if isinstance(focused, Button):
+            focused.press()
+        else:
+            self.query_one("#choose", Button).press()
+
+    def action_newline(self):
+        editor = self.query_one("#payload", TextArea)
+        editor.focus()
+        editor.replace("\n", *editor.selection)
+
     def action_cancel(self):
+        self.payload = self.query_one("#payload", TextArea).text
         self.dismiss(None)
 
 
@@ -94,18 +153,34 @@ class AgentPicker(ModalScreen[Agent | None]):
     def compose(self) -> ComposeResult:
         with Vertical(classes="dialog", id="agents"):
             yield Label("DRAFT TO AN AGENT · NO SUBMISSION", classes="dialog-title")
-            yield Static("Choose an existing agent. Workspace, tab and repository identify the destination.", classes="muted")
+            yield Static(
+                "Choose an existing agent. Workspace, tab and repository identify the destination.",
+                classes="muted",
+            )
             yield DataTable(id="agent-table", cursor_type="row", zebra_stripes=True)
             with Horizontal(classes="buttons"):
-                yield Button("Draft into selected agent", id="draft", variant="primary", disabled=not self.agents)
+                yield Button(
+                    "Draft into selected agent", id="draft", variant="primary", disabled=not self.agents
+                )
                 yield Button("Cancel", id="cancel")
 
     def on_mount(self):
         table = self.query_one(DataTable)
         table.add_columns("Agent", "State", "Workspace", "Tab", "Working directory")
         for agent in self.agents:
-            table.add_row(*(Text(v) for v in (agent.name + (" · last used" if agent.pane == self.last else ""), agent.state,
-                agent.workspace_name, agent.tab, agent.cwd)), key=agent.pane)
+            table.add_row(
+                *(
+                    Text(v)
+                    for v in (
+                        agent.name + (" · last used" if agent.pane == self.last else ""),
+                        agent.state,
+                        agent.workspace_name,
+                        agent.tab,
+                        agent.cwd,
+                    )
+                ),
+                key=agent.pane,
+            )
         if self.agents:
             table.move_cursor(row=next((i for i, a in enumerate(self.agents) if a.pane == self.last), 0))
         table.focus()
@@ -143,7 +218,12 @@ class NotesScreen(ModalScreen[tuple[str, str] | None]):
         table.add_columns("Source", "Environment / resource", "Your instruction")
         for note in self.notes:
             e = note.evidence
-            table.add_row(Text(e.source), Text(e.context+" / "+e.resource_name), Text(note.instruction.splitlines()[0]), key=note.id)
+            table.add_row(
+                Text(e.source),
+                Text(e.context + " / " + e.resource_name),
+                Text(note.instruction.splitlines()[0]),
+                key=note.id,
+            )
         table.focus()
 
     @on(Button.Pressed)
@@ -205,13 +285,22 @@ class EventsScreen(ModalScreen[KubeEvent | None]):
         table = self.query_one(DataTable)
         table.add_columns("Time (UTC)", "Type", "Reason", "Object", "Count")
         for i, event in enumerate(self.events):
-            table.add_row(Text(event.at.isoformat()), Text(event.level), Text(event.reason), Text(event.resource), event.count, key=str(i))
+            table.add_row(
+                Text(event.at.isoformat()),
+                Text(event.level),
+                Text(event.reason),
+                Text(event.resource),
+                event.count,
+                key=str(i),
+            )
         table.focus()
 
     @on(DataTable.RowHighlighted)
     def highlight(self):
         if self.events:
-            self.query_one("#event-message", Static).update(Text(self.events[self.query_one(DataTable).cursor_row].message))
+            self.query_one("#event-message", Static).update(
+                Text(self.events[self.query_one(DataTable).cursor_row].message)
+            )
 
     @on(DataTable.RowSelected)
     @on(Button.Pressed, "#capture")
@@ -230,8 +319,13 @@ class LogSelection:
 
 
 class LogsScreen(ModalScreen[LogSelection | None]):
-    BINDINGS = [("escape", "cancel", "Back"), ("c", "capture", "Capture selected"),
-                ("v", "mark", "Mark / unmark"), ("m", "mark", "Mark / unmark"), ("s", "send", "Draft selected")]
+    BINDINGS = [
+        ("escape", "cancel", "Back"),
+        ("c", "capture", "Capture selected"),
+        ("v", "mark", "Mark / unmark"),
+        ("m", "mark", "Mark / unmark"),
+        ("s", "send", "Draft selected"),
+    ]
 
     def __init__(self, records: tuple[LogEntry, ...]):
         super().__init__()
@@ -240,8 +334,14 @@ class LogsScreen(ModalScreen[LogSelection | None]):
 
     def compose(self) -> ComposeResult:
         with Vertical(classes="dialog", id="logs-inspector"):
-            yield Label("LOG INSPECTOR · ↑/↓ SELECT · v MARK / UNMARK · s SEND SELECTED", classes="dialog-title")
-            yield Static("0 marked · the cursor entry is used when none are marked", id="marked-status", classes="muted")
+            yield Label(
+                "LOG INSPECTOR · ↑/↓ SELECT · v MARK / UNMARK · s SEND SELECTED", classes="dialog-title"
+            )
+            yield Static(
+                "0 marked · the cursor entry is used when none are marked",
+                id="marked-status",
+                classes="muted",
+            )
             yield DataTable(id="log-table", cursor_type="row", zebra_stripes=True)
             yield TextArea("", read_only=True, id="raw-record", soft_wrap=True)
             with Horizontal(classes="buttons"):
@@ -253,7 +353,14 @@ class LogsScreen(ModalScreen[LogSelection | None]):
         table = self.query_one(DataTable)
         table.add_columns("Mark", "Time (UTC)", "Level", "Pod / container", "Message")
         for record in self.records:
-            table.add_row("", Text(record.at.isoformat()), Text(record.level), Text(record.pod+"/"+record.container), Text(record.message[:160]), key=str(record.id))
+            table.add_row(
+                "",
+                Text(record.at.isoformat()),
+                Text(record.level),
+                Text(record.pod + "/" + record.container),
+                Text(record.message[:160]),
+                key=str(record.id),
+            )
         table.focus()
 
     @on(DataTable.RowHighlighted)
@@ -274,11 +381,21 @@ class LogsScreen(ModalScreen[LogSelection | None]):
                 self.marked.remove(record.id)
             else:
                 self.marked.add(record.id)
-            table.update_cell(str(record.id), table.columns[next(iter(table.columns))].key, "●" if record.id in self.marked else "")
-            self.query_one("#marked-status", Static).update(f"{len(self.marked)} marked · records are frozen while you select")
+            table.update_cell(
+                str(record.id),
+                table.columns[next(iter(table.columns))].key,
+                "●" if record.id in self.marked else "",
+            )
+            self.query_one("#marked-status", Static).update(
+                f"{len(self.marked)} marked · records are frozen while you select"
+            )
 
     def selection(self):
-        return tuple(r for r in self.records if r.id in self.marked) if self.marked else (self.records[self.query_one(DataTable).cursor_row],)
+        return (
+            tuple(r for r in self.records if r.id in self.marked)
+            if self.marked
+            else (self.records[self.query_one(DataTable).cursor_row],)
+        )
 
     @on(Button.Pressed, "#capture")
     def action_capture(self):
@@ -302,18 +419,22 @@ class HelpScreen(ModalScreen[None]):
         with Vertical(classes="dialog"):
             yield Label("UFFE · READ-ONLY CONTROLS", classes="dialog-title")
             with VerticalScroll():
-                yield Static("Tab  Switch between pods and live log selection\n↑/↓  Select a pod or log in the active area\n←/→  Choose environment\n"
+                yield Static(
+                    "Tab  Switch between pods and live log selection\n↑/↓  Select a pod or log in the active area\n←/→  Choose environment\n"
                     "Enter  Resource details\nl  Filter logs to selected pod/workload\na  All logs in scope\n"
                     "p  Pods / deployments\n0–3  Namespace filter\n/  Search\nEsc  Clear filters / close dialog\n"
                     "PageUp/PageDown  Log history\nSpace  Pause/resume\nHome  Follow latest\n"
                     "i / w / x  Information / Warning / Error (repeat to return to All)\nf  Expand logs\n"
-                    "v  Mark/unmark a log entry (move to logs first with Tab)\nCtrl+L  Large log inspector\ns  Annotate and draft marked/selected logs to an agent\n"
+                    "b  Both warnings and errors (repeat to return to All)\n"
+                    "v  Mark/unmark a log entry (move to logs first with Tab)\nCtrl+L  Large log inspector\n"
+                    "s  Preview marked/selected logs; Enter confirms, Enter chooses agent\n"
                     "e  Kubernetes events\nc  Capture resource and annotate\nn  Pending notes\n"
                     "s  Preview request, choose agent, draft without submission\nr  Refresh health (read-only)\n"
                     "?  Help\nq  Quit\n\n"
                     "Evidence stays frozen through refresh and pod replacement. Notes are in memory only.\n"
                     "The receiving agent runs in its own pane with its own permissions. You review and submit.\n"
-                    "Uffe has no cluster mutation, shell, restart, scale or port-forward actions.")
+                    "Uffe has no cluster mutation, shell, restart, scale or port-forward actions."
+                )
             yield Button("Back", id="back")
 
     @on(Button.Pressed)

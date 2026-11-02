@@ -1,4 +1,5 @@
 """Portable configuration. Context names are references, never credentials."""
+
 from dataclasses import dataclass
 import os
 from pathlib import Path
@@ -36,7 +37,9 @@ class Config:
         return tuple(dict.fromkeys(n for e in self.environments for n in e.namespaces))
 
     def repo_for(self, namespace: str, workload: str) -> str:
-        return next((r.path for r in self.repositories if r.namespace == namespace and r.workload == workload), "")
+        return next(
+            (r.path for r in self.repositories if r.namespace == namespace and r.workload == workload), ""
+        )
 
 
 def default_path() -> Path:
@@ -53,11 +56,19 @@ def load(path: Path) -> Config:
     environments = []
     for item in data.get("environments", []):
         name, context, namespaces = item.get("name"), item.get("context"), item.get("namespaces")
-        if not isinstance(name, str) or not name.strip() or not isinstance(context, str) or not context.strip():
+        if (
+            not isinstance(name, str)
+            or not name.strip()
+            or not isinstance(context, str)
+            or not context.strip()
+        ):
             raise ValueError("Each environment needs a nonempty name and kubeconfig context")
         if not isinstance(namespaces, list) or not namespaces:
             raise ValueError(f"{name}: namespaces must be a nonempty array")
-        if any(not isinstance(n, str) or not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", n) for n in namespaces):
+        if any(
+            not isinstance(n, str) or not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", n)
+            for n in namespaces
+        ):
             raise ValueError(f"{name}: invalid Kubernetes namespace")
         environments.append(Environment(name.strip(), context.strip(), tuple(dict.fromkeys(namespaces))))
     if not 1 <= len(environments) <= 4:
@@ -88,11 +99,17 @@ def load(path: Path) -> Config:
             re.compile(value)
         except re.error as error:
             raise ValueError("Invalid exclude_containers expression") from error
-    repositories = tuple(Repository(r["namespace"], r["workload"], str(Path(r["path"]).expanduser()))
-                         for r in data.get("repositories", []))
+    repositories = tuple(
+        Repository(r["namespace"], r["workload"], str(Path(r["path"]).expanduser()))
+        for r in data.get("repositories", [])
+    )
     return Config(tuple(environments), repositories, timezone, interval, history, size, tuple(excludes))
 
 
 def demo_config() -> Config:
-    return Config((Environment("PROD", "demo-prod", ("payments", "support")),
-                   Environment("UAT", "demo-uat", ("payments", "support"))))
+    return Config(
+        (
+            Environment("PROD", "demo-prod", ("payments", "support")),
+            Environment("UAT", "demo-uat", ("payments", "support")),
+        )
+    )

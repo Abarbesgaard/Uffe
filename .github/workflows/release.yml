@@ -1,0 +1,100 @@
+name: Release
+
+# Tag-driven releases. Bump the version in pyproject.toml and herdr-plugin.toml;
+# auto-tag.yml then tags main and calls this workflow directly (a tag pushed with
+# GITHUB_TOKEN does not trigger the push event below). Manually:
+#   git tag v0.2.0 && git push origin v0.2.0
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_call:
+    inputs:
+      tag:
+        description: Tag to release, e.g. v0.2.0
+        type: string
+        required: true
+    secrets:
+      PYPI_API_TOKEN:
+        required: false
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to (re)release, e.g. v0.2.0
+        required: true
+
+permissions: {}
+
+jobs:
+  # Build the wheel and sdist from the tag and attach them to a GitHub Release.
+  # `uv tool install` and herdr can then install a pinned version.
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ env.TAG }}
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          enable-cache: false
+
+      - name: Check the tag matches both versions
+        run: |
+          py=$(grep -m1 '^version' pyproject.toml | sed 's/.*"\(.*\)".*/\1/')
+          plugin=$(grep -m1 '^version' herdr-plugin.toml | sed 's/.*"\(.*\)".*/\1/')
+          if [ "$TAG" != "v$py" ] || [ "$TAG" != "v$plugin" ]; then
+            echo "::error::Tag $TAG does not match pyproject.toml ($py) and herdr-plugin.toml ($plugin)."
+            exit 1
+          fi
+
+      - name: Build
+        run: uv build
+
+      - name: Smoke-test the wheel
+        run: uv run --isolated --no-project --with dist/*.whl uffe --banner
+
+      - name: Create release and upload assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          (cd dist && sha256sum ./* > SHA256SUMS.txt)
+          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag \
+              --title "$TAG" --generate-notes
+          fi
+          gh release upload "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --clobber
+
+  # Publish to PyPI. No-op unless the PYPI_API_TOKEN secret is set.
+  # Publishes exactly the files attached to the GitHub Release.
+  pypi:
+    needs: release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          enable-cache: false
+          ignore-empty-workdir: true
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          UV_PUBLISH_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+        run: |
+          if [ -z "${UV_PUBLISH_TOKEN:-}" ]; then
+            echo "PYPI_API_TOKEN not set — skipping PyPI publish."
+            exit 0
+          fi
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir dist \
+            --pattern '*.whl' --pattern '*.tar.gz'
+          uv publish dist/*

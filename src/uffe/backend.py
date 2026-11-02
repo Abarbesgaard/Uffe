@@ -1,4 +1,5 @@
 """Scoped GET transport and app-owned, bounded Stern streams."""
+
 import asyncio
 from dataclasses import replace
 import http.client
@@ -38,6 +39,7 @@ class ReadClient:
     The Unix socket is private, routes are exact allowlists and every HTTP call
     made by Uffe is GET. Transport creation never rewrites kubeconfig.
     """
+
     def __init__(self, environment: Environment):
         self.environment = environment
         self.directory = Path(tempfile.mkdtemp(prefix="uffe-", dir="/tmp"))
@@ -47,9 +49,12 @@ class ReadClient:
 
     def allowed(self, path: str) -> bool:
         for namespace in self.environment.namespaces:
-            if path in (f"/api/v1/namespaces/{namespace}/pods", f"/api/v1/namespaces/{namespace}/events",
-                        f"/apis/apps/v1/namespaces/{namespace}/deployments",
-                        f"/apis/metrics.k8s.io/v1beta1/namespaces/{namespace}/pods"):
+            if path in (
+                f"/api/v1/namespaces/{namespace}/pods",
+                f"/api/v1/namespaces/{namespace}/events",
+                f"/apis/apps/v1/namespaces/{namespace}/deployments",
+                f"/apis/metrics.k8s.io/v1beta1/namespaces/{namespace}/pods",
+            ):
                 return True
         return False
 
@@ -64,20 +69,33 @@ class ReadClient:
         if not executable:
             raise ReadError("kubectl is missing from PATH")
         namespaces = "(" + "|".join(re.escape(n) for n in self.environment.namespaces) + ")"
-        paths = (rf"^(/api/v1/namespaces/{namespaces}/(pods|events)|"
-                 rf"/apis/apps/v1/namespaces/{namespaces}/deployments|"
-                 rf"/apis/metrics.k8s.io/v1beta1/namespaces/{namespaces}/pods)$")
+        paths = (
+            rf"^(/api/v1/namespaces/{namespaces}/(pods|events)|"
+            rf"/apis/apps/v1/namespaces/{namespaces}/deployments|"
+            rf"/apis/metrics.k8s.io/v1beta1/namespaces/{namespaces}/pods)$"
+        )
         self.process = subprocess.Popen(
-            [executable, "--context", self.environment.context, "proxy", f"--unix-socket={self.socket}",
-             f"--accept-paths={paths}", "--reject-methods=POST|PUT|PATCH|DELETE|CONNECT|OPTIONS|HEAD|TRACE"],
-            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            start_new_session=True, umask=0o077)
+            [
+                executable,
+                "--context",
+                self.environment.context,
+                "proxy",
+                f"--unix-socket={self.socket}",
+                f"--accept-paths={paths}",
+                "--reject-methods=POST|PUT|PATCH|DELETE|CONNECT|OPTIONS|HEAD|TRACE",
+            ],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+            umask=0o077,
+        )
         for _ in range(100):
             if self.socket.exists():
                 return
             if self.process.poll() is not None:
                 raise ReadError("Cannot start kubectl connection; check kubeconfig/authentication")
-            time.sleep(.02)
+            time.sleep(0.02)
         raise ReadError("Connection startup timed out")
 
     def get(self, path: str) -> list:
@@ -149,7 +167,9 @@ class LiveBackend:
                 key = (environment.context, namespace)
                 try:
                     pods = await asyncio.to_thread(client.get, f"/api/v1/namespaces/{namespace}/pods")
-                    deps = await asyncio.to_thread(client.get, f"/apis/apps/v1/namespaces/{namespace}/deployments")
+                    deps = await asyncio.to_thread(
+                        client.get, f"/apis/apps/v1/namespaces/{namespace}/deployments"
+                    )
                     resources = normalize(environment.context, namespace, pods, deps)
                     previous = self.scopes[key]
                     self.scopes[key] = replace(previous, resources=resources, observed_at=utcnow(), error="")
@@ -168,19 +188,43 @@ class LiveBackend:
     async def extras(self, client: ReadClient, key: tuple[str, str]):
         context, namespace = key
         try:
-            values = await asyncio.to_thread(client.get, f"/apis/metrics.k8s.io/v1beta1/namespaces/{namespace}/pods")
+            values = await asyncio.to_thread(
+                client.get, f"/apis/metrics.k8s.io/v1beta1/namespaces/{namespace}/pods"
+            )
             scope = self.scopes[key]
-            self.scopes[key] = replace(scope, resources=with_metrics(scope.resources, values), metrics_state="available")
+            self.scopes[key] = replace(
+                scope, resources=with_metrics(scope.resources, values), metrics_state="available"
+            )
         except Exception:
             self.scopes[key] = replace(self.scopes[key], metrics_state="unavailable")
         self.changed.set()
         try:
             values = await asyncio.to_thread(client.get, f"/api/v1/namespaces/{namespace}/events")
-            events = tuple(sorted((KubeEvent(context, namespace, v["metadata"]["uid"],
-                v.get("involvedObject", {}).get("name", ""), v.get("involvedObject", {}).get("uid", ""),
-                timestamp(v.get("lastTimestamp") or v.get("eventTime") or v["metadata"].get("creationTimestamp")),
-                v.get("type", "Normal"), v.get("reason", ""), clean(v.get("message", "")), v.get("count", 1))
-                for v in values), key=lambda e: e.at, reverse=True))[:100]
+            events = tuple(
+                sorted(
+                    (
+                        KubeEvent(
+                            context,
+                            namespace,
+                            v["metadata"]["uid"],
+                            v.get("involvedObject", {}).get("name", ""),
+                            v.get("involvedObject", {}).get("uid", ""),
+                            timestamp(
+                                v.get("lastTimestamp")
+                                or v.get("eventTime")
+                                or v["metadata"].get("creationTimestamp")
+                            ),
+                            v.get("type", "Normal"),
+                            v.get("reason", ""),
+                            clean(v.get("message", "")),
+                            v.get("count", 1),
+                        )
+                        for v in values
+                    ),
+                    key=lambda e: e.at,
+                    reverse=True,
+                )
+            )[:100]
             self.scopes[key] = replace(self.scopes[key], events=events, events_state="available")
         except Exception:
             self.scopes[key] = replace(self.scopes[key], events_state="unavailable")
@@ -191,9 +235,25 @@ class LiveBackend:
         if not binary:
             self.stream_state[environment.context] = "stern missing from PATH"
             return
-        command = [binary, ".", "--context", environment.context, "-o", "json", "--timestamps",
-                   "--tail", "200", "--since", self.config.log_history, "--only-log-lines",
-                   "--init-containers=false", "--container-state", "running", "--max-log-requests", "100"]
+        command = [
+            binary,
+            ".",
+            "--context",
+            environment.context,
+            "-o",
+            "json",
+            "--timestamps",
+            "--tail",
+            "200",
+            "--since",
+            self.config.log_history,
+            "--only-log-lines",
+            "--init-containers=false",
+            "--container-state",
+            "running",
+            "--max-log-requests",
+            "100",
+        ]
         for namespace in environment.namespaces:
             command += ["-n", namespace]
         for container in self.config.exclude_containers:
@@ -203,9 +263,14 @@ class LiveBackend:
             process = None
             stderr_task = None
             try:
-                process = await asyncio.create_subprocess_exec(*command, stdin=asyncio.subprocess.DEVNULL,
-                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, start_new_session=True,
-                    limit=1024*1024)
+                process = await asyncio.create_subprocess_exec(
+                    *command,
+                    stdin=asyncio.subprocess.DEVNULL,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    start_new_session=True,
+                    limit=1024 * 1024,
+                )
                 self.processes.add(process)
                 self.stream_state[environment.context] = "live"
 
@@ -213,7 +278,10 @@ class LiveBackend:
                     assert process and process.stderr
                     async for raw in process.stderr:
                         text = raw.decode(errors="replace").lower()
-                        if any(v in text for v in ("unauthorized", "forbidden", "authenticate", "sign in", "device")):
+                        if any(
+                            v in text
+                            for v in ("unauthorized", "forbidden", "authenticate", "sign in", "device")
+                        ):
                             self.stream_state[environment.context] = "authentication/access required"
                         elif any(v in text for v in ("error", "failed", "connection")):
                             self.stream_state[environment.context] = "reconnecting"
@@ -247,9 +315,9 @@ class LiveBackend:
                 break
             self.stream_state[environment.context] = "reconnecting"
             await asyncio.sleep(delay)
-            delay = min(delay*2, 15)
+            delay = min(delay * 2, 15)
             # On reconnect, avoid repeatedly replaying all history.
-            command[command.index("--tail")+1] = "0"
+            command[command.index("--tail") + 1] = "0"
 
     async def close(self):
         self.stopping = True
@@ -261,6 +329,7 @@ class LiveBackend:
 
 class DemoBackend:
     """Deterministic synthetic data. No network or child processes."""
+
     def __init__(self, config: Config):
         self.config = config
         self.logs = LogBuffer(config.log_buffer)
@@ -271,25 +340,86 @@ class DemoBackend:
         for e in config.environments:
             for ns in e.namespaces:
                 workload = "payment-worker" if ns == "payments" else "support-api"
-                pod = {"metadata": {"name": workload+"-8bb74-demo1", "namespace": ns, "uid": e.context+ns,
-                        "creationTimestamp": utcnow().isoformat(), "labels": {"app": workload}},
-                       "spec": {"nodeName": "demo-node", "containers": [{"name": "app", "image": "example/"+workload+":1.2.3", "resources": {"requests": {"cpu": "100m", "memory": "128Mi"}}}]},
-                       "status": {"phase": "Running", "conditions": [{"type": "Ready", "status": "True"}],
-                       "containerStatuses": [{"name": "app", "ready": True, "restartCount": 1, "state": {"running": {}}}]}}
-                dep = {"metadata": {"name": workload, "uid": e.context+ns+"dep", "generation": 1},
-                       "spec": {"replicas": 1, "selector": {"matchLabels": {"app": workload}}, "template": {"spec": pod["spec"]}},
-                       "status": {"readyReplicas": 1, "updatedReplicas": 1, "availableReplicas": 1, "observedGeneration": 1}}
-                resources = tuple(replace(r, cpu=42, memory=96) for r in normalize(e.context, ns, [pod], [dep]))
-                event = KubeEvent(e.context, ns, e.context+ns+"event", pod["metadata"]["name"], pod["metadata"]["uid"],
-                                  utcnow(), "Warning", "BackOff", "Synthetic retry event for the offline demo", 3)
-                self.scopes[(e.context, ns)] = Scope(e.context, ns, resources, (event,), utcnow(), "", "available", "available")
+                pod = {
+                    "metadata": {
+                        "name": workload + "-8bb74-demo1",
+                        "namespace": ns,
+                        "uid": e.context + ns,
+                        "creationTimestamp": utcnow().isoformat(),
+                        "labels": {"app": workload},
+                    },
+                    "spec": {
+                        "nodeName": "demo-node",
+                        "containers": [
+                            {
+                                "name": "app",
+                                "image": "example/" + workload + ":1.2.3",
+                                "resources": {"requests": {"cpu": "100m", "memory": "128Mi"}},
+                            }
+                        ],
+                    },
+                    "status": {
+                        "phase": "Running",
+                        "conditions": [{"type": "Ready", "status": "True"}],
+                        "containerStatuses": [
+                            {"name": "app", "ready": True, "restartCount": 1, "state": {"running": {}}}
+                        ],
+                    },
+                }
+                dep = {
+                    "metadata": {"name": workload, "uid": e.context + ns + "dep", "generation": 1},
+                    "spec": {
+                        "replicas": 1,
+                        "selector": {"matchLabels": {"app": workload}},
+                        "template": {"spec": pod["spec"]},
+                    },
+                    "status": {
+                        "readyReplicas": 1,
+                        "updatedReplicas": 1,
+                        "availableReplicas": 1,
+                        "observedGeneration": 1,
+                    },
+                }
+                resources = tuple(
+                    replace(r, cpu=42, memory=96) for r in normalize(e.context, ns, [pod], [dep])
+                )
+                event = KubeEvent(
+                    e.context,
+                    ns,
+                    e.context + ns + "event",
+                    pod["metadata"]["name"],
+                    pod["metadata"]["uid"],
+                    utcnow(),
+                    "Warning",
+                    "BackOff",
+                    "Synthetic retry event for the offline demo",
+                    3,
+                )
+                self.scopes[(e.context, ns)] = Scope(
+                    e.context, ns, resources, (event,), utcnow(), "", "available", "available"
+                )
 
     def tick(self):
         for (context, namespace), scope in self.scopes.items():
             pod = next(r for r in scope.resources if r.kind == "Pod")
-            self.logs.append(context, json.dumps({"podName": pod.name, "namespace": namespace,
-                "containerName": "app", "timestamp": utcnow().isoformat(),
-                "message": json.dumps({"level": "warning", "message": "Synthetic request timed out; retrying", "attempt": 2})}))
+            self.logs.append(
+                context,
+                json.dumps(
+                    {
+                        "podName": pod.name,
+                        "namespace": namespace,
+                        "containerName": "app",
+                        "timestamp": utcnow().isoformat(),
+                        "message": json.dumps(
+                            {
+                                "level": "warning",
+                                "message": "Synthetic request timed out; retrying",
+                                "attempt": 2,
+                            }
+                        ),
+                    }
+                ),
+            )
 
     async def start(self):
         self.tick()
@@ -299,6 +429,7 @@ class DemoBackend:
                 await asyncio.sleep(2)
                 self.tick()
                 self.scopes = {k: replace(v, observed_at=utcnow()) for k, v in self.scopes.items()}
+
         self.task = asyncio.create_task(loop())
 
     async def close(self):
